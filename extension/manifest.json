@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Omarchy LinkSheet",
+  "name": "Omarchy Linkpick",
   "version": "0.2.0",
-  "description": "Route external links from Chromium/Chrome app windows through Omarchy LinkSheet",
+  "description": "Route external links from Chromium/Chrome app windows through Omarchy Linkpick",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4TMXzv10vt76MMRFUgXne3c5agFYCYWmhQfcP20JndGW/69EGnlE8Px5UD86Au+5B2EIAE2dT5xe7leyH0lwEFbqZjtcO/Wv0JtrXmgLeijkdnj8/nOmXYYjNhbsOPNIoR7g+i+qe1jtDGANXzN597uiMW4X9kuDg3PseFwM0cfuat6V6yqmVt6Bt4xNAaWIfbyWkxlXWK4q1OoQe+vg7tTZbYWPzEIlC5jYe8i1xfWQGkNBJ4aVZtMSA6jXOnd1qJMz4rAUwn5MeRDsWeCkexjcLTUIkpcOkWyGtmT5aclNFWXYXTgljVqsfOe3AHAMcnY7MME83YV/z3EtM92nXQIDAQAB",
   "permissions": ["nativeMessaging", "tabs", "windows"],
   "host_permissions": ["http://*/*", "https://*/*"],

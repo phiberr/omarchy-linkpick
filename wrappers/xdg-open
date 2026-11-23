@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# xdg-open wrapper: route http(s) through omarchy-linksheet, everything else
-# to the real /usr/bin/xdg-open. Avoid recursion via OMARCHY_LINKSHEET_WRAP.
+# xdg-open wrapper: route http(s) through omarchy-linkpick, everything else
+# to the real /usr/bin/xdg-open. Avoid recursion via OMARCHY_LINKPICK_WRAP.
 
 set -euo pipefail
 
 REAL_XDG_OPEN=/usr/bin/xdg-open
-HELPER="${HOME}/.local/bin/omarchy-linksheet"
-[[ -x $HELPER ]] || HELPER="$(command -v omarchy-linksheet || true)"
+HELPER="${HOME}/.local/bin/omarchy-linkpick"
+[[ -x $HELPER ]] || HELPER="$(command -v omarchy-linkpick || true)"
 
-if [[ ${OMARCHY_LINKSHEET_WRAP:-} == 1 ]]; then
+if [[ ${OMARCHY_LINKPICK_WRAP:-} == 1 ]]; then
   exec "$REAL_XDG_OPEN" "$@"
 fi
 
@@ -25,7 +25,7 @@ if [[ -n ${HELPER:-} && -x $HELPER ]]; then
       -*) continue ;;
     esac
     if is_url "$arg"; then
-      export OMARCHY_LINKSHEET_WRAP=1
+      export OMARCHY_LINKPICK_WRAP=1
       exec "$HELPER" open "$arg"
     fi
   done

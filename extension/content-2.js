@@ -1,5 +1,5 @@
 // Intercept external http(s) navigations inside Chromium/Chrome --app / PWA
-// windows and hand them to LinkSheet via the background native host.
+// windows and hand them to Linkpick via the background native host.
 // Filename is versioned so --load-extension picks up updates.
 
 (function () {

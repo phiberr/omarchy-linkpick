@@ -1,8 +1,8 @@
 [Desktop Entry]
 Version=1.0
-Name=LinkSheet
-Comment=Choose how to open links (Omarchy LinkSheet)
-Exec=__LINKSHEET_EXEC__ open %u
+Name=Linkpick
+Comment=Choose how to open links (Omarchy Linkpick)
+Exec=__LINKPICK_EXEC__ open %u
 Terminal=false
 Type=Application
 NoDisplay=true

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Shadow Omarchy's omarchy-cmd-default-browser so LinkSheet is not treated as
+# Shadow Omarchy's omarchy-cmd-default-browser so Linkpick is not treated as
 # the real browser. Webapps (X, YouTube, Discord, …) must keep launching in
-# Chrome/Brave/etc.; LinkSheet only routes http(s) opens.
+# Chrome/Brave/etc.; Linkpick only routes http(s) opens.
 
 set -euo pipefail
 
 # Same discovery rules as /usr/share/omarchy/bin/omarchy-cmd-default-browser,
-# with omarchy-linksheet.desktop skipped like omarchy-browser.desktop.
+# with omarchy-linkpick.desktop skipped like omarchy-browser.desktop.
 
 IFS=: read -ra data_dirs <<<"${XDG_DATA_HOME:-$HOME/.local/share}:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 IFS=: read -ra config_dirs <<<"${XDG_CONFIG_HOME:-$HOME/.config}:${XDG_CONFIG_DIRS:-/etc/xdg}"
@@ -14,7 +14,7 @@ IFS=: read -ra desktops <<<"${XDG_CURRENT_DESKTOP:-}"
 
 is_router() {
   case "$1" in
-    omarchy-browser.desktop|omarchy-linksheet.desktop) return 0 ;;
+    omarchy-browser.desktop|omarchy-linkpick.desktop|omarchy-linksheet.desktop) return 0 ;;
     *) return 1 ;;
   esac
 }

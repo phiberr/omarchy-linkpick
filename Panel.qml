@@ -6,8 +6,8 @@ import qs.Ui
 
 Panel {
   id: root
-  moduleName: "io.github.phiberr.linksheet"
-  ipcTarget: "io.github.phiberr.linksheet"
+  moduleName: "io.github.phiberr.linkpick"
+  ipcTarget: "io.github.phiberr.linkpick"
   manageIpc: false
 
   property var anchorItem: null
@@ -21,7 +21,7 @@ Panel {
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color dim: Qt.darker(foreground, 1.55)
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
-  readonly property string helper: "omarchy-linksheet"
+  readonly property string helper: "omarchy-linkpick"
 
   function refresh() {
     if (!statusProc.running) statusProc.running = true
@@ -89,7 +89,7 @@ Panel {
         spacing: Style.space(10)
 
         Text {
-          text: "LinkSheet"
+          text: "Linkpick"
           color: root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.heading
@@ -163,7 +163,7 @@ Panel {
             Quickshell.execDetached([
               "omarchy-launch-terminal",
               "bash", "-lc",
-              "omarchy-linksheet status; echo; omarchy-linksheet handlers; echo; echo 'Examples:'; echo '  omarchy-linksheet always youtube.com youtube'; echo '  omarchy-linksheet preferred github.com browser'; echo '  omarchy-linksheet always example.com clear'; echo; exec bash"
+              "omarchy-linkpick status; echo; omarchy-linkpick handlers; echo; echo 'Examples:'; echo '  omarchy-linkpick always youtube.com youtube'; echo '  omarchy-linkpick preferred github.com browser'; echo '  omarchy-linkpick always example.com clear'; echo; exec bash"
             ])
             root.close()
           }
@@ -179,7 +179,7 @@ Panel {
             Quickshell.execDetached([
               "omarchy-launch-terminal",
               "bash", "-lc",
-              "omarchy-linksheet doctor; echo; read -n1 -s -p 'Press any key'"
+              "omarchy-linkpick doctor; echo; read -n1 -s -p 'Press any key'"
             ])
             root.close()
           }

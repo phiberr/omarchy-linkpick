@@ -1,11 +1,11 @@
 // Keep this filename versioned. Chromium caches service workers for extensions
 // loaded via --load-extension, so a new URL forces registration of new code.
 
-function openViaLinkSheet(url) {
+function openViaLinkpick(url) {
   if (!url || typeof url !== "string") return;
   if (!/^https?:\/\//i.test(url)) return;
 
-  chrome.runtime.sendNativeMessage("com.omarchy.linksheet", { url }, () => {
+  chrome.runtime.sendNativeMessage("io.github.phiberr.linkpick", { url }, () => {
     void chrome.runtime.lastError;
   });
 }
@@ -72,7 +72,7 @@ chrome.tabs.onCreated.addListener((tab) => {
     } catch (_) {
       /* tab may already be gone */
     }
-    openViaLinkSheet(url);
+    openViaLinkpick(url);
   })();
 });
 
@@ -80,7 +80,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== "object") return false;
 
   if (message.type === "open") {
-    openViaLinkSheet(message.url);
+    openViaLinkpick(message.url);
     sendResponse({ ok: true });
     return false;
   }

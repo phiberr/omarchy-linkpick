@@ -4,7 +4,7 @@ import qs.Ui
 
 BarWidget {
   id: root
-  moduleName: "io.github.phiberr.linksheet"
+  moduleName: "io.github.phiberr.linkpick"
 
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false
   property bool enabled: true
@@ -36,7 +36,7 @@ BarWidget {
 
   Process {
     id: statusProc
-    command: ["omarchy-linksheet", "status"]
+    command: ["omarchy-linkpick", "status"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -66,7 +66,7 @@ BarWidget {
   }
 
   IpcHandler {
-    target: "io.github.phiberr.linksheet"
+    target: "io.github.phiberr.linkpick"
 
     function open(): void { root.open() }
     function close(): void { root.close() }
@@ -81,8 +81,8 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     text: "󰌹"
-    tooltipText: root.enabled ? "LinkSheet (on)" : "LinkSheet (off)"
-    active: root.opened || root.enabled
+    tooltipText: root.enabled ? "Linkpick (on)" : "Linkpick (off)"
+    active: root.opened
     onPressed: function(b) { root.togglePanel() }
   }
 }

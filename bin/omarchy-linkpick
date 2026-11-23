@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
-# LinkSheet-style URL router for Omarchy.
+# LinkSheet-inspired URL router for Omarchy.
 # Intercepts http(s) opens (via xdg-open wrapper and/or desktop mime handler),
 # applies host rules, optionally strips tracking params, and asks with
 # omarchy-menu-select when no always/preferred rule matches.
 
 set -euo pipefail
 
-CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-linksheet"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-linkpick"
 CONFIG_FILE="$CONFIG_DIR/config.json"
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-linksheet"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-linkpick"
 HISTORY_FILE="$STATE_DIR/history.json"
-PLUGIN_ID="io.github.phiberr.linksheet"
+PLUGIN_ID="io.github.phiberr.linkpick"
 PLUGIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$PLUGIN_ID"
+LEGACY_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-linksheet"
+LEGACY_CONFIG_FILE="$LEGACY_CONFIG_DIR/config.json"
+LEGACY_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-linksheet"
+LEGACY_HISTORY_FILE="$LEGACY_STATE_DIR/history.json"
 DEFAULT_CONFIG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/config/config.json"
 
 usage() {
   cat <<'EOF'
-Usage: omarchy-linksheet <command> [args]
+Usage: omarchy-linkpick <command> [args]
 
 Commands:
   open <url>                 Route a URL (chooser / rules / browser)
@@ -34,8 +38,20 @@ Commands:
 EOF
 }
 
+# Copy prior LinkSheet config/history into the new paths. Never delete the originals.
+migrate_legacy_data() {
+  mkdir -p "$CONFIG_DIR" "$STATE_DIR"
+  if [[ ! -f $CONFIG_FILE && -f $LEGACY_CONFIG_FILE ]]; then
+    cp -a "$LEGACY_CONFIG_FILE" "$CONFIG_FILE"
+  fi
+  if [[ ! -f $HISTORY_FILE && -f $LEGACY_HISTORY_FILE ]]; then
+    cp -a "$LEGACY_HISTORY_FILE" "$HISTORY_FILE"
+  fi
+}
+
 ensure_config() {
   mkdir -p "$CONFIG_DIR" "$STATE_DIR"
+  migrate_legacy_data
   if [[ ! -f $CONFIG_FILE ]]; then
     if [[ -f $DEFAULT_CONFIG ]]; then
       cp "$DEFAULT_CONFIG" "$CONFIG_FILE"
@@ -132,7 +148,7 @@ if host not in SHORT:
     print(url)
     raise SystemExit(0)
 
-headers = {"User-Agent": "Mozilla/5.0 OmarchyLinkSheet/1.0"}
+headers = {"User-Agent": "Mozilla/5.0 OmarchyLinkpick/1.0"}
 for method in ("HEAD", "GET"):
     try:
         with urlopen(Request(url, method=method, headers=headers), timeout=3) as resp:
@@ -269,7 +285,7 @@ run_handler() {
   id=$(jq -er '.id' <<<"$handler_json")
   mapfile -t cmd < <(jq -r --arg url "$url" '.command[] | gsub("\\{url\\}"; $url)' <<<"$handler_json")
   if (( ${#cmd[@]} == 0 )); then
-    echo "omarchy-linksheet: empty command for handler '$id'" >&2
+    echo "omarchy-linkpick: empty command for handler '$id'" >&2
     return 1
   fi
   record_history "$url" "$id"
@@ -280,7 +296,7 @@ run_handler() {
 open_copy() {
   local url="$1"
   printf '%s' "$url" | wl-copy 2>/dev/null || printf '%s' "$url" | xclip -selection clipboard 2>/dev/null || true
-  omarchy notification send --app-name LinkSheet -g "󰆏" "Copied URL" "$url" >/dev/null 2>&1 || true
+  omarchy notification send --app-name Linkpick -g "󰆏" "Copied URL" "$url" >/dev/null 2>&1 || true
   record_history "$url" "copy"
 }
 
@@ -364,7 +380,7 @@ choose_and_open() {
 
   handler=$(handler_by_id "$choice") || true
   if [[ -z ${handler:-} ]]; then
-    echo "omarchy-linksheet: unknown choice: $selection" >&2
+    echo "omarchy-linkpick: unknown choice: $selection" >&2
     return 1
   fi
 
@@ -374,12 +390,12 @@ choose_and_open() {
   case "$persist" in
     always)
       cmd_set_host_map always "$short" "$choice" >/dev/null
-      omarchy notification send --app-name LinkSheet -g "󰕥" \
+      omarchy notification send --app-name Linkpick -g "󰕥" \
         "Always open in $name" "$short" >/dev/null 2>&1 || true
       ;;
     preferred)
       cmd_set_host_map preferred "$short" "$choice" >/dev/null
-      omarchy notification send --app-name LinkSheet -g "󰍜" \
+      omarchy notification send --app-name Linkpick -g "󰍜" \
         "Prefer $name" "$short" >/dev/null 2>&1 || true
       ;;
   esac
@@ -389,7 +405,7 @@ choose_and_open() {
 
 cmd_open() {
   local raw="${1-}"
-  [[ -n $raw ]] || { echo "Usage: omarchy-linksheet open <url>" >&2; exit 2; }
+  [[ -n $raw ]] || { echo "Usage: omarchy-linkpick open <url>" >&2; exit 2; }
 
   ensure_config
   local url host
@@ -398,7 +414,7 @@ cmd_open() {
     if [[ -x /usr/bin/xdg-open ]]; then
       exec /usr/bin/xdg-open "$raw"
     fi
-    echo "omarchy-linksheet: not a URL: $raw" >&2
+    echo "omarchy-linkpick: not a URL: $raw" >&2
     exit 1
   }
 
@@ -464,7 +480,7 @@ cmd_clipboard() {
   text=$(wl-paste -n 2>/dev/null || xclip -selection clipboard -o 2>/dev/null || true)
   url=$(grep -Eom1 'https?://[^[:space:]"'\''<>]+' <<<"$text" || true)
   if [[ -z $url ]]; then
-    omarchy notification send --app-name LinkSheet -g "󰌹" "No URL on clipboard" >/dev/null 2>&1 || true
+    omarchy notification send --app-name Linkpick -g "󰌹" "No URL on clipboard" >/dev/null 2>&1 || true
     exit 1
   fi
   cmd_open "$url"
@@ -486,8 +502,8 @@ cmd_set_host_map() {
 }
 
 EXT_ID="pdjfhdidnbjlmmjbchjjiolokofhehcb"
-EXT_INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-linksheet/extension"
-HOST_NAME="com.omarchy.linksheet"
+EXT_INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-linkpick/extension"
+HOST_NAME="io.github.phiberr.linkpick"
 
 flags_add_extension() {
   local file="$1" ext="$2"
@@ -532,11 +548,11 @@ PY
 
 install_native_host() {
   local root="$1"
-  local host_path="$HOME/.local/bin/omarchy-linksheet-host"
+  local host_path="$HOME/.local/bin/omarchy-linkpick-host"
   local template="$root/native-messaging-hosts/$HOST_NAME.json"
   local manifest browser_dirs dir
 
-  install -m 755 "$root/bin/omarchy-linksheet-host" "$host_path"
+  install -m 755 "$root/bin/omarchy-linkpick-host" "$host_path"
   manifest=$(sed "s|__HOST_PATH__|$host_path|g" "$template")
 
   browser_dirs=(
@@ -550,12 +566,13 @@ install_native_host() {
   for dir in "${browser_dirs[@]}"; do
     mkdir -p "$dir/NativeMessagingHosts"
     printf '%s\n' "$manifest" >"$dir/NativeMessagingHosts/$HOST_NAME.json"
+    rm -f "$dir/NativeMessagingHosts/com.omarchy.linksheet.json"
   done
 }
 
 uninstall_native_host() {
   local dir
-  rm -f "$HOME/.local/bin/omarchy-linksheet-host"
+  rm -f "$HOME/.local/bin/omarchy-linkpick-host"
   for dir in \
     "$HOME/.config/chromium" \
     "$HOME/.config/google-chrome" \
@@ -563,7 +580,8 @@ uninstall_native_host() {
     "$HOME/.config/google-chrome-unstable" \
     "$HOME/.config/BraveSoftware/Brave-Browser" \
     "$HOME/.config/microsoft-edge"; do
-    rm -f "$dir/NativeMessagingHosts/$HOST_NAME.json"
+    rm -f "$dir/NativeMessagingHosts/$HOST_NAME.json" \
+          "$dir/NativeMessagingHosts/com.omarchy.linksheet.json"
   done
 }
 
@@ -575,43 +593,45 @@ install_files() {
     "$HOME/.config/omarchy/plugins" "$HOME/.config/environment.d" \
     "$CONFIG_DIR" "$EXT_INSTALL_DIR"
 
-  install -m 755 "$root/bin/omarchy-linksheet" "$HOME/.local/bin/omarchy-linksheet"
+  install -m 755 "$root/bin/omarchy-linkpick" "$HOME/.local/bin/omarchy-linkpick"
   install -m 755 "$root/wrappers/xdg-open" "$HOME/.local/bin/xdg-open"
   install -m 755 "$root/wrappers/omarchy-cmd-default-browser" \
     "$HOME/.local/bin/omarchy-cmd-default-browser"
-  local helper_path="$HOME/.local/bin/omarchy-linksheet"
-  sed "s|__LINKSHEET_EXEC__|$helper_path|g" \
-    "$root/share/applications/omarchy-linksheet.desktop" \
-    >"$HOME/.local/share/applications/omarchy-linksheet.desktop"
-  chmod 644 "$HOME/.local/share/applications/omarchy-linksheet.desktop"
+  local helper_path="$HOME/.local/bin/omarchy-linkpick"
+  sed "s|__LINKPICK_EXEC__|$helper_path|g" \
+    "$root/share/applications/omarchy-linkpick.desktop" \
+    >"$HOME/.local/share/applications/omarchy-linkpick.desktop"
+  chmod 644 "$HOME/.local/share/applications/omarchy-linkpick.desktop"
 
+  migrate_legacy_data
   if [[ ! -f $CONFIG_FILE ]]; then
     cp "$root/config/config.json" "$CONFIG_FILE"
   fi
 
   # Prefer ~/.local/bin ahead of /usr/bin so wrappers win.
-  cat >"$HOME/.config/environment.d/99-omarchy-linksheet.conf" <<EOF
+  cat >"$HOME/.config/environment.d/99-omarchy-linkpick.conf" <<EOF
 PATH=$HOME/.local/bin:\${PATH}
 EOF
+  rm -f "$HOME/.config/environment.d/99-omarchy-linksheet.conf"
 
   # Desktop mime fallback for portals / callers that skip PATH.
   local mime="$HOME/.config/hyprland-mimeapps.list"
   if [[ -f $mime ]]; then
     if grep -q '^x-scheme-handler/https=' "$mime"; then
-      sed -i 's|^x-scheme-handler/https=.*|x-scheme-handler/https=omarchy-linksheet.desktop|' "$mime"
+      sed -i 's|^x-scheme-handler/https=.*|x-scheme-handler/https=omarchy-linkpick.desktop|' "$mime"
     else
-      printf 'x-scheme-handler/https=omarchy-linksheet.desktop\n' >>"$mime"
+      printf 'x-scheme-handler/https=omarchy-linkpick.desktop\n' >>"$mime"
     fi
     if grep -q '^x-scheme-handler/http=' "$mime"; then
-      sed -i 's|^x-scheme-handler/http=.*|x-scheme-handler/http=omarchy-linksheet.desktop|' "$mime"
+      sed -i 's|^x-scheme-handler/http=.*|x-scheme-handler/http=omarchy-linkpick.desktop|' "$mime"
     else
-      printf 'x-scheme-handler/http=omarchy-linksheet.desktop\n' >>"$mime"
+      printf 'x-scheme-handler/http=omarchy-linkpick.desktop\n' >>"$mime"
     fi
   else
     cat >"$mime" <<'EOF'
 [Default Applications]
-x-scheme-handler/http=omarchy-linksheet.desktop
-x-scheme-handler/https=omarchy-linksheet.desktop
+x-scheme-handler/http=omarchy-linkpick.desktop
+x-scheme-handler/https=omarchy-linkpick.desktop
 EOF
   fi
 
@@ -636,12 +656,12 @@ EOF
   update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 
   cat <<EOF
-Installed omarchy-linksheet.
+Installed omarchy-linkpick.
 
 - Wrapper: ~/.local/bin/xdg-open
 - Default-browser shim: ~/.local/bin/omarchy-cmd-default-browser
-- Helper:  ~/.local/bin/omarchy-linksheet
-- Desktop: omarchy-linksheet.desktop (hyprland-mimeapps.list)
+- Helper:  ~/.local/bin/omarchy-linkpick
+- Desktop: omarchy-linkpick.desktop (hyprland-mimeapps.list)
 - Extension: $EXT_INSTALL_DIR (id $EXT_ID)
 - Native host: $HOST_NAME
 - Plugin:  $PLUGIN_DIR
@@ -657,16 +677,26 @@ EOF
 uninstall_files() {
   rm -f "$HOME/.local/bin/xdg-open"
   rm -f "$HOME/.local/bin/omarchy-cmd-default-browser"
-  rm -f "$HOME/.local/bin/omarchy-linksheet"
-  rm -f "$HOME/.local/share/applications/omarchy-linksheet.desktop"
-  rm -f "$HOME/.config/environment.d/99-omarchy-linksheet.conf"
+  rm -f "$HOME/.local/bin/omarchy-linkpick" "$HOME/.local/bin/omarchy-linksheet"
+  rm -f "$HOME/.local/share/applications/omarchy-linkpick.desktop" \
+        "$HOME/.local/share/applications/omarchy-linksheet.desktop"
+  rm -f "$HOME/.config/environment.d/99-omarchy-linkpick.conf" \
+        "$HOME/.config/environment.d/99-omarchy-linksheet.conf"
   uninstall_native_host
+  rm -f "$HOME/.local/bin/omarchy-linksheet-host"
   flags_remove_extension "${XDG_CONFIG_HOME:-$HOME/.config}/chromium-flags.conf" "$EXT_INSTALL_DIR"
   flags_remove_extension "${XDG_CONFIG_HOME:-$HOME/.config}/chrome-flags.conf" "$EXT_INSTALL_DIR"
+  flags_remove_extension "${XDG_CONFIG_HOME:-$HOME/.config}/chromium-flags.conf" \
+    "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-linksheet/extension"
+  flags_remove_extension "${XDG_CONFIG_HOME:-$HOME/.config}/chrome-flags.conf" \
+    "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-linksheet/extension"
+  rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-linkpick"
   rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-linksheet"
 
   local mime="$HOME/.config/hyprland-mimeapps.list"
   if [[ -f $mime ]]; then
+    sed -i 's|^x-scheme-handler/https=omarchy-linkpick.desktop|x-scheme-handler/https=omarchy-browser.desktop|' "$mime"
+    sed -i 's|^x-scheme-handler/http=omarchy-linkpick.desktop|x-scheme-handler/http=omarchy-browser.desktop|' "$mime"
     sed -i 's|^x-scheme-handler/https=omarchy-linksheet.desktop|x-scheme-handler/https=omarchy-browser.desktop|' "$mime"
     sed -i 's|^x-scheme-handler/http=omarchy-linksheet.desktop|x-scheme-handler/http=omarchy-browser.desktop|' "$mime"
   fi
@@ -674,14 +704,16 @@ uninstall_files() {
   if [[ -e $PLUGIN_DIR ]]; then
     rm -rf "$PLUGIN_DIR"
   fi
+  rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/io.github.phiberr.linksheet"
+  rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/phiberr.linksheet"
 
   update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 
   echo "Uninstalled wrappers, helper, desktop entry, extension, native host, and plugin $PLUGIN_ID."
   echo "Restored hyprland-mimeapps.list http(s) handlers to omarchy-browser.desktop."
   echo "Left user config at $CONFIG_FILE and history under $STATE_DIR."
+  echo "If a previous LinkSheet config/history still exists under ~/.config/omarchy-linksheet or ~/.local/state/omarchy-linksheet, it was left in place."
   echo "Restart Chromium/Chrome to drop the unloaded extension."
-  echo "If an older plugin folder exists at ~/.config/omarchy/plugins/phiberr.linksheet, remove it by hand."
 }
 
 cmd_doctor() {
@@ -690,7 +722,7 @@ cmd_doctor() {
   echo "enabled:  $(config_get '.enabled')"
   echo "ask:      $(config_get '.ask_by_default')"
   echo "strip:    $(config_get '.strip_tracking')"
-  echo "helper:   $(type -P omarchy-linksheet || echo missing)"
+  echo "helper:   $(type -P omarchy-linkpick || echo missing)"
   echo "wrapper:  $(type -P xdg-open) (real=/usr/bin/xdg-open)"
   if [[ $(type -P xdg-open) == "$HOME/.local/bin/xdg-open" ]]; then
     echo "PATH ok:  wrapper shadows /usr/bin/xdg-open"
@@ -703,7 +735,7 @@ cmd_doctor() {
   echo "launch-browser: $(type -P omarchy-launch-browser || echo missing)"
   echo "chrome bin: $(chrome_bin || echo missing)"
   echo "extension: $EXT_INSTALL_DIR ($( [[ -f $EXT_INSTALL_DIR/manifest.json ]] && echo present || echo missing ))"
-  echo "native host: $( [[ -x $HOME/.local/bin/omarchy-linksheet-host ]] && echo "$HOME/.local/bin/omarchy-linksheet-host" || echo missing )"
+  echo "native host: $( [[ -x $HOME/.local/bin/omarchy-linkpick-host ]] && echo "$HOME/.local/bin/omarchy-linkpick-host" || echo missing )"
   echo "chromium-flags load-extension:"
   awk -F= '/^--load-extension=/{print "  "$2}' "${XDG_CONFIG_HOME:-$HOME/.config}/chromium-flags.conf" 2>/dev/null || echo "  (no chromium-flags.conf)"
   echo "chrome-flags load-extension:"
@@ -738,22 +770,22 @@ main() {
       case "${1-}" in
         on|true|1) config_set '.ask_by_default = true' ;;
         off|false|0) config_set '.ask_by_default = false' ;;
-        *) echo "Usage: omarchy-linksheet set-ask on|off" >&2; exit 2 ;;
+        *) echo "Usage: omarchy-linkpick set-ask on|off" >&2; exit 2 ;;
       esac
       ;;
     set-strip)
       case "${1-}" in
         on|true|1) config_set '.strip_tracking = true' ;;
         off|false|0) config_set '.strip_tracking = false' ;;
-        *) echo "Usage: omarchy-linksheet set-strip on|off" >&2; exit 2 ;;
+        *) echo "Usage: omarchy-linkpick set-strip on|off" >&2; exit 2 ;;
       esac
       ;;
     always)
-      [[ $# -ge 2 ]] || { echo "Usage: omarchy-linksheet always <host> <handler|ask|clear>" >&2; exit 2; }
+      [[ $# -ge 2 ]] || { echo "Usage: omarchy-linkpick always <host> <handler|ask|clear>" >&2; exit 2; }
       cmd_set_host_map always "$1" "$2"
       ;;
     preferred)
-      [[ $# -ge 2 ]] || { echo "Usage: omarchy-linksheet preferred <host> <handler|ask|clear>" >&2; exit 2; }
+      [[ $# -ge 2 ]] || { echo "Usage: omarchy-linkpick preferred <host> <handler|ask|clear>" >&2; exit 2; }
       cmd_set_host_map preferred "$1" "$2"
       ;;
     handlers)
