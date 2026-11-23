@@ -638,7 +638,7 @@ EOF
   # Chromium/Chrome app-window interception.
   rm -rf "$EXT_INSTALL_DIR"
   mkdir -p "$EXT_INSTALL_DIR"
-  cp -a "$root/extension/." "$EXT_INSTALL_DIR/"
+  cp -a "$root/browser/chrome-extension/." "$EXT_INSTALL_DIR/"
   install_native_host "$root"
   flags_add_extension "${XDG_CONFIG_HOME:-$HOME/.config}/chromium-flags.conf" "$EXT_INSTALL_DIR"
   flags_add_extension "${XDG_CONFIG_HOME:-$HOME/.config}/chrome-flags.conf" "$EXT_INSTALL_DIR"
