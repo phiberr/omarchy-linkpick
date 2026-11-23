@@ -10,6 +10,16 @@ Linkpick is an independent Omarchy tool inspired by LinkSheet for Android
 
 Plugin ID: `io.github.phiberr.linkpick`
 
+## Screenshots
+
+The chooser:
+
+![Linkpick chooser](preview.png)
+
+The settings panel:
+
+![Linkpick settings](settings.png)
+
 ## Install
 
 Omarchy clones this repository into your plugin directory and enables the
