@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.phiberr.linksheet",
+  "name": "LinkSheet",
+  "version": "0.3.0",
+  "author": "phiberr",
+  "license": "MIT",
+  "description": "LinkSheet-style URL chooser: Chrome profiles, app-window interception, Just once / Always / Prefer host rules.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "LinkSheet",
+    "description": "Choose how links open; manage host rules",
+    "category": "System",
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "enabled": true,
+  "ask_by_default": true,
+  "strip_tracking": true,
+  "handlers": [
+    {
+      "id": "browser",
+      "name": "Browser",
+      "icon": "󰖟",
+      "command": ["omarchy-launch-browser", "{url}"]
+    },
+    {
+      "id": "browser-private",
+      "name": "Private browser",
+      "icon": "󰗹",
+      "command": ["omarchy-launch-browser", "--private", "{url}"]
+    },
+    {
+      "id": "youtube",
+      "name": "YouTube",
+      "icon": "󰗃",
+      "hosts": ["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be", "music.youtube.com"],
+      "command": ["omarchy-launch-webapp", "{url}"]
+    },
+    {
+      "id": "x",
+      "name": "X",
+      "icon": "󰫉",
+      "hosts": ["x.com", "www.x.com", "twitter.com", "www.twitter.com", "mobile.twitter.com"],
+      "command": ["omarchy-launch-webapp", "{url}"]
+    },
+    {
+      "id": "discord",
+      "name": "Discord",
+      "icon": "󰙯",
+      "hosts": ["discord.com", "www.discord.com", "discord.gg"],
+      "command": ["omarchy-launch-webapp", "{url}"]
+    },
+    {
+      "id": "whatsapp",
+      "name": "WhatsApp",
+      "icon": "󰖣",
+      "hosts": ["web.whatsapp.com", "whatsapp.com", "www.whatsapp.com", "wa.me", "api.whatsapp.com", "chat.whatsapp.com"],
+      "command": ["omarchy-launch-webapp", "{url}"]
+    }
+  ],
+  "always": {},
+  "preferred": {}
+}

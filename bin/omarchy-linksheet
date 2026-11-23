@@ -1,0 +1,774 @@
+#!/usr/bin/env bash
+# LinkSheet-style URL router for Omarchy.
+# Intercepts http(s) opens (via xdg-open wrapper and/or desktop mime handler),
+# applies host rules, optionally strips tracking params, and asks with
+# omarchy-menu-select when no always/preferred rule matches.
+
+set -euo pipefail
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy-linksheet"
+CONFIG_FILE="$CONFIG_DIR/config.json"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy-linksheet"
+HISTORY_FILE="$STATE_DIR/history.json"
+PLUGIN_ID="io.github.phiberr.linksheet"
+PLUGIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins/$PLUGIN_ID"
+DEFAULT_CONFIG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/config/config.json"
+
+usage() {
+  cat <<'EOF'
+Usage: omarchy-linksheet <command> [args]
+
+Commands:
+  open <url>                 Route a URL (chooser / rules / browser)
+  clipboard                  Open the first http(s) URL on the clipboard
+  status                     Print enabled/ask/strip and config path
+  enable | disable           Toggle interception
+  set-ask <on|off>           Ask when no always rule matches
+  set-strip <on|off>         Strip common tracking query params
+  always <host> <handler|ask|clear>
+  preferred <host> <handler|ask|clear>
+  handlers                   List handler ids (config + Chrome profiles)
+  install                    Install wrapper, desktop entry, mime defaults, plugin
+  uninstall                  Restore mime defaults; leave config
+  doctor                     Check PATH, mime, Chrome profiles, and config
+EOF
+}
+
+ensure_config() {
+  mkdir -p "$CONFIG_DIR" "$STATE_DIR"
+  if [[ ! -f $CONFIG_FILE ]]; then
+    if [[ -f $DEFAULT_CONFIG ]]; then
+      cp "$DEFAULT_CONFIG" "$CONFIG_FILE"
+    else
+      cat >"$CONFIG_FILE" <<'JSON'
+{"enabled":true,"ask_by_default":true,"strip_tracking":true,"handlers":[{"id":"browser","name":"Browser","icon":"󰖟","command":["omarchy-launch-browser","{url}"]}],"always":{},"preferred":{}}
+JSON
+    fi
+  fi
+}
+
+config_get() {
+  ensure_config
+  jq -er "$1" "$CONFIG_FILE"
+}
+
+config_set() {
+  ensure_config
+  local tmp
+  tmp=$(mktemp)
+  jq "$1" "$CONFIG_FILE" >"$tmp"
+  mv -f "$tmp" "$CONFIG_FILE"
+}
+
+normalize_url() {
+  local raw="$1"
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  raw="${raw%"${raw##*[![:space:]]}"}"
+  raw="${raw#<}"
+  raw="${raw%>}"
+  if [[ $raw =~ ^[Hh][Tt][Tt][Pp][Ss]?:// ]]; then
+    printf '%s\n' "$raw"
+    return 0
+  fi
+  if [[ $raw =~ ^[[:alnum:]][[:alnum:].-]+\.[[:alpha:]]{2,}(/.*)?$ ]]; then
+    printf 'https://%s\n' "$raw"
+    return 0
+  fi
+  return 1
+}
+
+url_host() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlparse
+u = urlparse(sys.argv[1])
+host = (u.hostname or "").lower()
+print(host)
+PY
+}
+
+strip_tracking() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlparse, parse_qsl, urlencode, urlunparse
+
+TRACK = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "utm_id", "utm_name", "utm_reader", "utm_social", "utm_social-type",
+    "fbclid", "gclid", "gclsrc", "dclid", "msclkid", "mc_eid", "mc_cid",
+    "igshid", "si", "ref", "ref_src", "ref_url", "source", "spm",
+    "yclid", "ymclid", "zanpid", "mkt_tok", "vero_id", "nr_email_referer",
+    "ncid", "srsltid", "sxsrf",
+}
+prefixes = ("utm_", "ga_", "hsa_", "pk_", "mtm_", "oly_", "vero_")
+
+u = urlparse(sys.argv[1])
+kept = []
+for k, v in parse_qsl(u.query, keep_blank_values=True):
+    lk = k.lower()
+    if lk in TRACK or any(lk.startswith(p) for p in prefixes):
+        continue
+    kept.append((k, v))
+print(urlunparse(u._replace(query=urlencode(kept, doseq=True))))
+PY
+}
+
+# Expand known shorteners (t.co from X, etc.) so rules/chooser see the real host.
+expand_short_url() {
+  python3 - "$1" <<'PY'
+import sys
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+
+SHORT = {
+    "t.co", "bit.ly", "bitly.com", "tinyurl.com", "goo.gl", "ow.ly",
+    "buff.ly", "rebrand.ly", "cutt.ly", "is.gd", "v.gd", "rb.gy",
+    "shorturl.at", "trib.al", "lnkd.in", "youtu.be",
+}
+
+url = sys.argv[1]
+host = (urlparse(url).hostname or "").lower()
+if host not in SHORT:
+    print(url)
+    raise SystemExit(0)
+
+headers = {"User-Agent": "Mozilla/5.0 OmarchyLinkSheet/1.0"}
+for method in ("HEAD", "GET"):
+    try:
+        with urlopen(Request(url, method=method, headers=headers), timeout=3) as resp:
+            print(resp.geturl())
+            raise SystemExit(0)
+    except SystemExit:
+        raise
+    except Exception:
+        continue
+print(url)
+PY
+}
+
+record_history() {
+  local url="$1" handler="$2"
+  mkdir -p "$STATE_DIR"
+  python3 - "$HISTORY_FILE" "$url" "$handler" <<'PY'
+import json, sys, time
+from pathlib import Path
+path = Path(sys.argv[1])
+url, handler = sys.argv[2], sys.argv[3]
+entries = []
+if path.exists():
+    try:
+        entries = json.loads(path.read_text())
+    except Exception:
+        entries = []
+entries.insert(0, {"url": url, "handler": handler, "ts": int(time.time())})
+path.write_text(json.dumps(entries[:50], indent=2) + "\n")
+PY
+}
+
+normalize_host() {
+  local host="$1"
+  host="${host#http://}"
+  host="${host#https://}"
+  host="${host%%/*}"
+  host="${host#www.}"
+  printf '%s\n' "$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')"
+}
+
+chrome_bin() {
+  local b
+  for b in google-chrome-stable google-chrome chromium chromium-browser; do
+    if command -v "$b" >/dev/null 2>&1; then
+      command -v "$b"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Dynamic Chrome/Chromium profile handlers from Local State.
+chrome_profile_handlers_json() {
+  local bin config_dir
+  bin=$(chrome_bin) || { echo '[]'; return 0; }
+  case "$(basename "$bin")" in
+    google-chrome|google-chrome-stable) config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/google-chrome" ;;
+    chromium|chromium-browser) config_dir="${XDG_CONFIG_HOME:-$HOME/.config}/chromium" ;;
+    *) echo '[]'; return 0 ;;
+  esac
+  python3 - "$bin" "$config_dir" <<'PY'
+import json, sys
+from pathlib import Path
+
+bin_path, config_dir = sys.argv[1], Path(sys.argv[2])
+state = config_dir / "Local State"
+if not state.exists():
+    print("[]")
+    raise SystemExit(0)
+
+try:
+    cache = json.loads(state.read_text()).get("profile", {}).get("info_cache", {})
+except Exception:
+    print("[]")
+    raise SystemExit(0)
+
+handlers = []
+for directory, info in cache.items():
+    if directory in ("Guest Profile", "System Profile"):
+        continue
+    name = (info.get("name") or directory).strip() or directory
+    email = (info.get("user_name") or info.get("gaia_name") or "").strip()
+    label = f"Chrome · {name}"
+    if email and email.lower() not in name.lower():
+        label = f"Chrome · {name} ({email})"
+    hid = f"chrome:{directory}"
+    handlers.append({
+        "id": hid,
+        "name": label,
+        "icon": "󰊯",
+        "source": "chrome-profile",
+        "profile_directory": directory,
+        "command": [bin_path, f"--profile-directory={directory}", "{url}"],
+    })
+
+# Stable order: Default first, then by display name.
+handlers.sort(key=lambda h: (0 if h["profile_directory"] == "Default" else 1, h["name"].lower()))
+print(json.dumps(handlers))
+PY
+}
+
+merged_handlers_json() {
+  ensure_config
+  local chrome
+  chrome=$(chrome_profile_handlers_json)
+  # Keep config order, then append Chrome profiles (do not unique_by — it sorts by id).
+  jq -c --argjson chrome "$chrome" '
+    (.handlers // []) as $cfg
+    | ($cfg | map(.id)) as $ids
+    | $cfg + [$chrome[] | select(.id as $id | ($ids | index($id) | not))]
+  ' "$CONFIG_FILE"
+}
+
+handler_by_id() {
+  local id="$1"
+  merged_handlers_json | jq -c --arg id "$id" '.[] | select(.id == $id)' | head -1
+}
+
+handlers_for_host() {
+  local host="$1"
+  merged_handlers_json | jq -c --arg host "$host" '
+    map(select(
+      (.hosts // [])
+      | map(ascii_downcase)
+      | any(. as $cand | $host == $cand or ($host | endswith("." + $cand)))
+    ))
+  '
+}
+
+run_handler() {
+  local handler_json="$1" url="$2"
+  local id
+  id=$(jq -er '.id' <<<"$handler_json")
+  mapfile -t cmd < <(jq -r --arg url "$url" '.command[] | gsub("\\{url\\}"; $url)' <<<"$handler_json")
+  if (( ${#cmd[@]} == 0 )); then
+    echo "omarchy-linksheet: empty command for handler '$id'" >&2
+    return 1
+  fi
+  record_history "$url" "$id"
+  # Never recurse through xdg-open.
+  exec env -u BROWSER "${cmd[@]}"
+}
+
+open_copy() {
+  local url="$1"
+  printf '%s' "$url" | wl-copy 2>/dev/null || printf '%s' "$url" | xclip -selection clipboard 2>/dev/null || true
+  omarchy notification send --app-name LinkSheet -g "󰆏" "Copied URL" "$url" >/dev/null 2>&1 || true
+  record_history "$url" "copy"
+}
+
+selection_id() {
+  # omarchy-menu-select returns "label" or "label<TAB>id" (subtext).
+  awk -F'\t' '{print $NF}' <<<"$1"
+}
+
+choose_persistence() {
+  local host="$1" handler_name="$2"
+  local short
+  short=$(normalize_host "$host")
+  local options=(
+    $'󰐊\tJust once\tonce'
+    "󰕥"$'\t'"Always open in ${handler_name} for ${short}"$'\t'"always"
+    "󰍜"$'\t'"Prefer ${handler_name} for ${short}"$'\t'"preferred"
+  )
+  local selection
+  if ! selection=$(omarchy-menu-select "Remember?" "${options[@]}" -- --width 520 --maxheight 280); then
+    echo "once"
+    return 0
+  fi
+  selection_id "$selection"
+}
+
+choose_and_open() {
+  local url="$1" host="$2"
+  local options=()
+  local matched seen=()
+  local all
+
+  all=$(merged_handlers_json)
+
+  matched=$(jq -c --arg host "$host" '
+    map(select(
+      (.hosts // [])
+      | map(ascii_downcase)
+      | any(. as $cand | $host == $cand or ($host | endswith("." + $cand)))
+    ))
+  ' <<<"$all")
+
+  while IFS= read -r row; do
+    [[ -n $row && $row != null ]] || continue
+    id=$(jq -er '.id' <<<"$row")
+    name=$(jq -er '.name' <<<"$row")
+    icon=$(jq -er '.icon // "󰌹"' <<<"$row")
+    options+=("$icon"$'\t'"$name"$'\t'"$id")
+    seen+=("$id")
+  done < <(jq -c '.[]' <<<"$matched")
+
+  while IFS= read -r row; do
+    [[ -n $row && $row != null ]] || continue
+    id=$(jq -er '.id' <<<"$row")
+    for s in "${seen[@]+"${seen[@]}"}"; do
+      [[ $s == "$id" ]] && continue 2
+    done
+    # jq -e treats empty as failure; under set -e that aborted the chooser.
+    source=$(jq -r '.source // empty' <<<"$row")
+    hosts=$(jq -c '.hosts // []' <<<"$row")
+    # Always offer browsers, Chrome profiles, and host-less handlers.
+    if [[ $hosts == "[]" || $id == browser || $id == browser-private || $source == chrome-profile ]]; then
+      name=$(jq -er '.name' <<<"$row")
+      icon=$(jq -er '.icon // "󰌹"' <<<"$row")
+      options+=("$icon"$'\t'"$name"$'\t'"$id")
+      seen+=("$id")
+    fi
+  done < <(jq -c '.[]' <<<"$all")
+
+  options+=($'󰆏\tCopy URL\tcopy')
+
+  local selection choice handler name persist short
+  if ! selection=$(omarchy-menu-select "Open link" "${options[@]}" -- --width 520 --maxheight 480); then
+    return 1
+  fi
+
+  choice=$(selection_id "$selection")
+  if [[ $choice == copy || $selection == "Copy URL" ]]; then
+    open_copy "$url"
+    return 0
+  fi
+
+  handler=$(handler_by_id "$choice") || true
+  if [[ -z ${handler:-} ]]; then
+    echo "omarchy-linksheet: unknown choice: $selection" >&2
+    return 1
+  fi
+
+  name=$(jq -er '.name' <<<"$handler")
+  persist=$(choose_persistence "$host" "$name")
+  short=$(normalize_host "$host")
+  case "$persist" in
+    always)
+      cmd_set_host_map always "$short" "$choice" >/dev/null
+      omarchy notification send --app-name LinkSheet -g "󰕥" \
+        "Always open in $name" "$short" >/dev/null 2>&1 || true
+      ;;
+    preferred)
+      cmd_set_host_map preferred "$short" "$choice" >/dev/null
+      omarchy notification send --app-name LinkSheet -g "󰍜" \
+        "Prefer $name" "$short" >/dev/null 2>&1 || true
+      ;;
+  esac
+
+  run_handler "$handler" "$url"
+}
+
+cmd_open() {
+  local raw="${1-}"
+  [[ -n $raw ]] || { echo "Usage: omarchy-linksheet open <url>" >&2; exit 2; }
+
+  ensure_config
+  local url host
+  url=$(normalize_url "$raw") || {
+    # Not a URL — fall back to real xdg-open if present.
+    if [[ -x /usr/bin/xdg-open ]]; then
+      exec /usr/bin/xdg-open "$raw"
+    fi
+    echo "omarchy-linksheet: not a URL: $raw" >&2
+    exit 1
+  }
+
+  if [[ $(config_get '.enabled') != true ]]; then
+    exec omarchy-launch-browser "$url"
+  fi
+
+  url=$(expand_short_url "$url")
+
+  if [[ $(config_get '.strip_tracking') == true ]]; then
+    url=$(strip_tracking "$url")
+  fi
+
+  host=$(url_host "$url")
+  local always preferred handler
+
+  always=$(jq -er --arg h "$host" '
+    .always
+    | to_entries
+    | map(select(. as $e | $h == $e.key or ($h | endswith("." + $e.key))))
+    | sort_by(.key | length)
+    | reverse
+    | .[0].value // empty
+  ' "$CONFIG_FILE" || true)
+
+  if [[ -n $always && $always != ask ]]; then
+    if [[ $always == copy ]]; then
+      open_copy "$url"
+      return 0
+    fi
+    handler=$(handler_by_id "$always") || true
+    if [[ -n ${handler:-} ]]; then
+      run_handler "$handler" "$url"
+    fi
+  fi
+
+  preferred=$(jq -er --arg h "$host" '
+    .preferred
+    | to_entries
+    | map(select(. as $e | $h == $e.key or ($h | endswith("." + $e.key))))
+    | sort_by(.key | length)
+    | reverse
+    | .[0].value // empty
+  ' "$CONFIG_FILE" || true)
+
+  if [[ -n $preferred && $preferred != ask ]]; then
+    handler=$(handler_by_id "$preferred") || true
+    if [[ -n ${handler:-} ]]; then
+      run_handler "$handler" "$url"
+    fi
+  fi
+
+  if [[ $always == ask || $preferred == ask || $(config_get '.ask_by_default') == true ]]; then
+    choose_and_open "$url" "$host"
+    return
+  fi
+
+  exec omarchy-launch-browser "$url"
+}
+
+cmd_clipboard() {
+  local text url
+  text=$(wl-paste -n 2>/dev/null || xclip -selection clipboard -o 2>/dev/null || true)
+  url=$(grep -Eom1 'https?://[^[:space:]"'\''<>]+' <<<"$text" || true)
+  if [[ -z $url ]]; then
+    omarchy notification send --app-name LinkSheet -g "󰌹" "No URL on clipboard" >/dev/null 2>&1 || true
+    exit 1
+  fi
+  cmd_open "$url"
+}
+
+cmd_set_host_map() {
+  local map="$1" host="$2" value="$3"
+  host=$(normalize_host "$host")
+  ensure_config
+  local tmp
+  tmp=$(mktemp)
+  if [[ $value == clear ]]; then
+    jq --arg map "$map" --arg host "$host" 'del(.[$map][$host])' "$CONFIG_FILE" >"$tmp"
+  else
+    jq --arg map "$map" --arg host "$host" --arg value "$value" '.[$map][$host] = $value' "$CONFIG_FILE" >"$tmp"
+  fi
+  mv -f "$tmp" "$CONFIG_FILE"
+  echo "$map $host -> $value"
+}
+
+EXT_ID="pdjfhdidnbjlmmjbchjjiolokofhehcb"
+EXT_INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-linksheet/extension"
+HOST_NAME="com.omarchy.linksheet"
+
+flags_add_extension() {
+  local file="$1" ext="$2"
+  mkdir -p "$(dirname "$file")"
+  if [[ ! -f $file ]]; then
+    if [[ -f ${XDG_CONFIG_HOME:-$HOME/.config}/chromium-flags.conf && $file != "${XDG_CONFIG_HOME:-$HOME/.config}/chromium-flags.conf" ]]; then
+      cp "${XDG_CONFIG_HOME:-$HOME/.config}/chromium-flags.conf" "$file"
+    elif [[ -f /usr/share/omarchy/config/chromium-flags.conf ]]; then
+      cp /usr/share/omarchy/config/chromium-flags.conf "$file"
+    else
+      printf -- '--load-extension=%s\n' "$ext" >"$file"
+      return
+    fi
+  fi
+  grep -qF "$ext" "$file" && return 0
+  if grep -q '^--load-extension=' "$file"; then
+    sed -i "s|^--load-extension=.*|&,$ext|" "$file"
+  else
+    printf -- '--load-extension=%s\n' "$ext" >>"$file"
+  fi
+}
+
+flags_remove_extension() {
+  local file="$1" ext="$2"
+  [[ -f $file ]] || return 0
+  python3 - "$file" "$ext" <<'PY'
+import sys
+from pathlib import Path
+path, ext = Path(sys.argv[1]), sys.argv[2]
+lines = path.read_text().splitlines()
+out = []
+for line in lines:
+    if line.startswith("--load-extension="):
+        parts = [p for p in line.split("=", 1)[1].split(",") if p and p != ext]
+        if parts:
+            out.append("--load-extension=" + ",".join(parts))
+    else:
+        out.append(line)
+path.write_text("\n".join(out) + ("\n" if out else ""))
+PY
+}
+
+install_native_host() {
+  local root="$1"
+  local host_path="$HOME/.local/bin/omarchy-linksheet-host"
+  local template="$root/native-messaging-hosts/$HOST_NAME.json"
+  local manifest browser_dirs dir
+
+  install -m 755 "$root/bin/omarchy-linksheet-host" "$host_path"
+  manifest=$(sed "s|__HOST_PATH__|$host_path|g" "$template")
+
+  browser_dirs=(
+    "$HOME/.config/chromium"
+    "$HOME/.config/google-chrome"
+    "$HOME/.config/google-chrome-beta"
+    "$HOME/.config/google-chrome-unstable"
+    "$HOME/.config/BraveSoftware/Brave-Browser"
+    "$HOME/.config/microsoft-edge"
+  )
+  for dir in "${browser_dirs[@]}"; do
+    mkdir -p "$dir/NativeMessagingHosts"
+    printf '%s\n' "$manifest" >"$dir/NativeMessagingHosts/$HOST_NAME.json"
+  done
+}
+
+uninstall_native_host() {
+  local dir
+  rm -f "$HOME/.local/bin/omarchy-linksheet-host"
+  for dir in \
+    "$HOME/.config/chromium" \
+    "$HOME/.config/google-chrome" \
+    "$HOME/.config/google-chrome-beta" \
+    "$HOME/.config/google-chrome-unstable" \
+    "$HOME/.config/BraveSoftware/Brave-Browser" \
+    "$HOME/.config/microsoft-edge"; do
+    rm -f "$dir/NativeMessagingHosts/$HOST_NAME.json"
+  done
+}
+
+install_files() {
+  local root
+  root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" \
+    "$HOME/.config/omarchy/plugins" "$HOME/.config/environment.d" \
+    "$CONFIG_DIR" "$EXT_INSTALL_DIR"
+
+  install -m 755 "$root/bin/omarchy-linksheet" "$HOME/.local/bin/omarchy-linksheet"
+  install -m 755 "$root/wrappers/xdg-open" "$HOME/.local/bin/xdg-open"
+  install -m 755 "$root/wrappers/omarchy-cmd-default-browser" \
+    "$HOME/.local/bin/omarchy-cmd-default-browser"
+  local helper_path="$HOME/.local/bin/omarchy-linksheet"
+  sed "s|__LINKSHEET_EXEC__|$helper_path|g" \
+    "$root/share/applications/omarchy-linksheet.desktop" \
+    >"$HOME/.local/share/applications/omarchy-linksheet.desktop"
+  chmod 644 "$HOME/.local/share/applications/omarchy-linksheet.desktop"
+
+  if [[ ! -f $CONFIG_FILE ]]; then
+    cp "$root/config/config.json" "$CONFIG_FILE"
+  fi
+
+  # Prefer ~/.local/bin ahead of /usr/bin so wrappers win.
+  cat >"$HOME/.config/environment.d/99-omarchy-linksheet.conf" <<EOF
+PATH=$HOME/.local/bin:\${PATH}
+EOF
+
+  # Desktop mime fallback for portals / callers that skip PATH.
+  local mime="$HOME/.config/hyprland-mimeapps.list"
+  if [[ -f $mime ]]; then
+    if grep -q '^x-scheme-handler/https=' "$mime"; then
+      sed -i 's|^x-scheme-handler/https=.*|x-scheme-handler/https=omarchy-linksheet.desktop|' "$mime"
+    else
+      printf 'x-scheme-handler/https=omarchy-linksheet.desktop\n' >>"$mime"
+    fi
+    if grep -q '^x-scheme-handler/http=' "$mime"; then
+      sed -i 's|^x-scheme-handler/http=.*|x-scheme-handler/http=omarchy-linksheet.desktop|' "$mime"
+    else
+      printf 'x-scheme-handler/http=omarchy-linksheet.desktop\n' >>"$mime"
+    fi
+  else
+    cat >"$mime" <<'EOF'
+[Default Applications]
+x-scheme-handler/http=omarchy-linksheet.desktop
+x-scheme-handler/https=omarchy-linksheet.desktop
+EOF
+  fi
+
+  # Chromium/Chrome app-window interception.
+  rm -rf "$EXT_INSTALL_DIR"
+  mkdir -p "$EXT_INSTALL_DIR"
+  cp -a "$root/extension/." "$EXT_INSTALL_DIR/"
+  install_native_host "$root"
+  flags_add_extension "${XDG_CONFIG_HOME:-$HOME/.config}/chromium-flags.conf" "$EXT_INSTALL_DIR"
+  flags_add_extension "${XDG_CONFIG_HOME:-$HOME/.config}/chrome-flags.conf" "$EXT_INSTALL_DIR"
+
+  # Shell plugin files. If this is already the omarchy plugin checkout
+  # (omarchy plugin add), leave the tree alone. Otherwise copy only the
+  # manifest and QML into the plugin directory — do not delete a git checkout.
+  if [[ $root != "$PLUGIN_DIR" ]]; then
+    mkdir -p "$PLUGIN_DIR"
+    install -m 644 "$root/manifest.json" "$PLUGIN_DIR/manifest.json"
+    install -m 644 "$root/BarWidget.qml" "$PLUGIN_DIR/BarWidget.qml"
+    install -m 644 "$root/Panel.qml" "$PLUGIN_DIR/Panel.qml"
+  fi
+
+  update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
+
+  cat <<EOF
+Installed omarchy-linksheet.
+
+- Wrapper: ~/.local/bin/xdg-open
+- Default-browser shim: ~/.local/bin/omarchy-cmd-default-browser
+- Helper:  ~/.local/bin/omarchy-linksheet
+- Desktop: omarchy-linksheet.desktop (hyprland-mimeapps.list)
+- Extension: $EXT_INSTALL_DIR (id $EXT_ID)
+- Native host: $HOST_NAME
+- Plugin:  $PLUGIN_DIR
+- Config:  $CONFIG_FILE
+
+Restart Chromium/Chrome (and X/YouTube webapps) so the extension loads.
+Log out/in once if PATH does not yet prefer ~/.local/bin.
+
+Add the bar widget: omarchy bar move $PLUGIN_ID --section right
+EOF
+}
+
+uninstall_files() {
+  rm -f "$HOME/.local/bin/xdg-open"
+  rm -f "$HOME/.local/bin/omarchy-cmd-default-browser"
+  rm -f "$HOME/.local/bin/omarchy-linksheet"
+  rm -f "$HOME/.local/share/applications/omarchy-linksheet.desktop"
+  rm -f "$HOME/.config/environment.d/99-omarchy-linksheet.conf"
+  uninstall_native_host
+  flags_remove_extension "${XDG_CONFIG_HOME:-$HOME/.config}/chromium-flags.conf" "$EXT_INSTALL_DIR"
+  flags_remove_extension "${XDG_CONFIG_HOME:-$HOME/.config}/chrome-flags.conf" "$EXT_INSTALL_DIR"
+  rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-linksheet"
+
+  local mime="$HOME/.config/hyprland-mimeapps.list"
+  if [[ -f $mime ]]; then
+    sed -i 's|^x-scheme-handler/https=omarchy-linksheet.desktop|x-scheme-handler/https=omarchy-browser.desktop|' "$mime"
+    sed -i 's|^x-scheme-handler/http=omarchy-linksheet.desktop|x-scheme-handler/http=omarchy-browser.desktop|' "$mime"
+  fi
+
+  if [[ -e $PLUGIN_DIR ]]; then
+    rm -rf "$PLUGIN_DIR"
+  fi
+
+  update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
+
+  echo "Uninstalled wrappers, helper, desktop entry, extension, native host, and plugin $PLUGIN_ID."
+  echo "Restored hyprland-mimeapps.list http(s) handlers to omarchy-browser.desktop."
+  echo "Left user config at $CONFIG_FILE and history under $STATE_DIR."
+  echo "Restart Chromium/Chrome to drop the unloaded extension."
+  echo "If an older plugin folder exists at ~/.config/omarchy/plugins/phiberr.linksheet, remove it by hand."
+}
+
+cmd_doctor() {
+  ensure_config
+  echo "config:   $CONFIG_FILE"
+  echo "enabled:  $(config_get '.enabled')"
+  echo "ask:      $(config_get '.ask_by_default')"
+  echo "strip:    $(config_get '.strip_tracking')"
+  echo "helper:   $(type -P omarchy-linksheet || echo missing)"
+  echo "wrapper:  $(type -P xdg-open) (real=/usr/bin/xdg-open)"
+  if [[ $(type -P xdg-open) == "$HOME/.local/bin/xdg-open" ]]; then
+    echo "PATH ok:  wrapper shadows /usr/bin/xdg-open"
+  else
+    echo "PATH:     wrapper not first — log out/in after install, or call ~/.local/bin/xdg-open"
+  fi
+  echo "default-browser cmd: $(type -P omarchy-cmd-default-browser || echo missing) -> $(omarchy-cmd-default-browser 2>/dev/null || echo unset)"
+  echo "https mime (hyprland): $(awk -F= '/^x-scheme-handler\/https=/{print $2; exit}' "$HOME/.config/hyprland-mimeapps.list" 2>/dev/null || echo unset)"
+  echo "menu-select: $(type -P omarchy-menu-select || echo missing)"
+  echo "launch-browser: $(type -P omarchy-launch-browser || echo missing)"
+  echo "chrome bin: $(chrome_bin || echo missing)"
+  echo "extension: $EXT_INSTALL_DIR ($( [[ -f $EXT_INSTALL_DIR/manifest.json ]] && echo present || echo missing ))"
+  echo "native host: $( [[ -x $HOME/.local/bin/omarchy-linksheet-host ]] && echo "$HOME/.local/bin/omarchy-linksheet-host" || echo missing )"
+  echo "chromium-flags load-extension:"
+  awk -F= '/^--load-extension=/{print "  "$2}' "${XDG_CONFIG_HOME:-$HOME/.config}/chromium-flags.conf" 2>/dev/null || echo "  (no chromium-flags.conf)"
+  echo "chrome-flags load-extension:"
+  awk -F= '/^--load-extension=/{print "  "$2}' "${XDG_CONFIG_HOME:-$HOME/.config}/chrome-flags.conf" 2>/dev/null || echo "  (no chrome-flags.conf)"
+  echo "chrome profiles:"
+  chrome_profile_handlers_json | jq -r '.[] | "  \(.id)\t\(.name)"' 2>/dev/null || echo "  (none)"
+}
+
+main() {
+  local cmd="${1-}"
+  shift || true
+  case "$cmd" in
+    open) cmd_open "${1-}" ;;
+    clipboard) cmd_clipboard ;;
+    status)
+      ensure_config
+      jq -n --slurpfile cfg "$CONFIG_FILE" --argjson dyn "$(chrome_profile_handlers_json)" '
+        $cfg[0] as $c
+        | {
+            enabled: $c.enabled,
+            ask_by_default: $c.ask_by_default,
+            strip_tracking: $c.strip_tracking,
+            always: $c.always,
+            preferred: $c.preferred,
+            handlers: (([$c.handlers[].id] + [$dyn[].id]) | unique)
+          }
+      '
+      ;;
+    enable) config_set '.enabled = true'; echo enabled ;;
+    disable) config_set '.enabled = false'; echo disabled ;;
+    set-ask)
+      case "${1-}" in
+        on|true|1) config_set '.ask_by_default = true' ;;
+        off|false|0) config_set '.ask_by_default = false' ;;
+        *) echo "Usage: omarchy-linksheet set-ask on|off" >&2; exit 2 ;;
+      esac
+      ;;
+    set-strip)
+      case "${1-}" in
+        on|true|1) config_set '.strip_tracking = true' ;;
+        off|false|0) config_set '.strip_tracking = false' ;;
+        *) echo "Usage: omarchy-linksheet set-strip on|off" >&2; exit 2 ;;
+      esac
+      ;;
+    always)
+      [[ $# -ge 2 ]] || { echo "Usage: omarchy-linksheet always <host> <handler|ask|clear>" >&2; exit 2; }
+      cmd_set_host_map always "$1" "$2"
+      ;;
+    preferred)
+      [[ $# -ge 2 ]] || { echo "Usage: omarchy-linksheet preferred <host> <handler|ask|clear>" >&2; exit 2; }
+      cmd_set_host_map preferred "$1" "$2"
+      ;;
+    handlers)
+      merged_handlers_json | jq -r '.[] | "\(.id)\t\(.name)\t\((.hosts // [])|join(","))\t\(.source // "config")"'
+      ;;
+    install) install_files ;;
+    uninstall) uninstall_files ;;
+    doctor) cmd_doctor ;;
+    -h|--help|help|"") usage ;;
+    *)
+      echo "Unknown command: $cmd" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+}
+
+main "$@"

@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# Shadow Omarchy's omarchy-cmd-default-browser so LinkSheet is not treated as
+# the real browser. Webapps (X, YouTube, Discord, …) must keep launching in
+# Chrome/Brave/etc.; LinkSheet only routes http(s) opens.
+
+set -euo pipefail
+
+# Same discovery rules as /usr/share/omarchy/bin/omarchy-cmd-default-browser,
+# with omarchy-linksheet.desktop skipped like omarchy-browser.desktop.
+
+IFS=: read -ra data_dirs <<<"${XDG_DATA_HOME:-$HOME/.local/share}:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+IFS=: read -ra config_dirs <<<"${XDG_CONFIG_HOME:-$HOME/.config}:${XDG_CONFIG_DIRS:-/etc/xdg}"
+IFS=: read -ra desktops <<<"${XDG_CURRENT_DESKTOP:-}"
+
+is_router() {
+  case "$1" in
+    omarchy-browser.desktop|omarchy-linksheet.desktop) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+installed() {
+  local data_dir command
+
+  for data_dir in "${data_dirs[@]}"; do
+    [[ -r $data_dir/applications/$1 ]] || continue
+    command=$(sed -n 's/^Exec=\([^ ]*\).*/\1/p' "$data_dir/applications/$1" | head -1)
+    [[ -n $command ]] && command -v "$command" >/dev/null
+    return
+  done
+
+  return 1
+}
+
+for config_dir in "${config_dirs[@]}"; do
+  for desktop in "${desktops[@]}" ""; do
+    list="$config_dir/${desktop:+${desktop,,}-}mimeapps.list"
+    [[ -f $list ]] || continue
+
+    entries=$(awk '
+      /^\[Default Applications\]/ { section = 1; next }
+      /^\[/ { section = 0 }
+      section && index($0, "x-scheme-handler/http=") == 1 { print substr($0, 23); exit }
+    ' "$list")
+
+    IFS=';' read -ra entries <<<"$entries"
+    for entry in "${entries[@]}"; do
+      if [[ -n $entry ]] && ! is_router "$entry" && installed "$entry"; then
+        echo "$entry"
+        exit 0
+      fi
+    done
+  done
+done
+
+browser=$(env -u BROWSER XDG_CURRENT_DESKTOP= xdg-settings get default-web-browser 2>/dev/null || true)
+if [[ -z $browser ]] || is_router "$browser"; then
+  browser=$(XDG_CURRENT_DESKTOP= xdg-mime query default x-scheme-handler/https 2>/dev/null || true)
+fi
+
+if [[ -n $browser ]] && ! is_router "$browser"; then
+  echo "$browser"
+fi

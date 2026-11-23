@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# xdg-open wrapper: route http(s) through omarchy-linksheet, everything else
+# to the real /usr/bin/xdg-open. Avoid recursion via OMARCHY_LINKSHEET_WRAP.
+
+set -euo pipefail
+
+REAL_XDG_OPEN=/usr/bin/xdg-open
+HELPER="${HOME}/.local/bin/omarchy-linksheet"
+[[ -x $HELPER ]] || HELPER="$(command -v omarchy-linksheet || true)"
+
+if [[ ${OMARCHY_LINKSHEET_WRAP:-} == 1 ]]; then
+  exec "$REAL_XDG_OPEN" "$@"
+fi
+
+is_url() {
+  local s="$1"
+  [[ $s =~ ^[Hh][Tt][Tt][Pp][Ss]?:// ]] && return 0
+  [[ $s =~ ^[[:alnum:]][[:alnum:].-]+\.[[:alpha:]]{2,}(/.*)?$ ]] && return 0
+  return 1
+}
+
+if [[ -n ${HELPER:-} && -x $HELPER ]]; then
+  for arg in "$@"; do
+    case "$arg" in
+      -*) continue ;;
+    esac
+    if is_url "$arg"; then
+      export OMARCHY_LINKSHEET_WRAP=1
+      exec "$HELPER" open "$arg"
+    fi
+  done
+fi
+
+exec "$REAL_XDG_OPEN" "$@"

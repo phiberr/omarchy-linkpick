@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Native messaging host: open a URL through omarchy-linksheet.
+# Protocol: 4-byte little-endian length + JSON payload on stdin.
+
+set -euo pipefail
+
+export PATH="${HOME}/.local/bin:/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:${PATH}"
+
+HELPER="${HOME}/.local/bin/omarchy-linksheet"
+[[ -x $HELPER ]] || HELPER="$(command -v omarchy-linksheet || true)"
+
+reply() {
+  python3 -c 'import struct,sys; b=sys.argv[1].encode(); sys.stdout.buffer.write(struct.pack("<I", len(b))); sys.stdout.buffer.write(b)' "$1"
+}
+
+main() {
+  local length payload url ok
+
+  length=$(head -c4 | od -An -v -tu4 --endian=little | tr -d ' ')
+  [[ -n ${length:-} ]] && ((length > 0 && length < 1048576)) || exit 0
+
+  payload=$(head -c "$length")
+  url=$(jq -r '.url // empty' <<<"$payload" 2>/dev/null || true)
+
+  ok=false
+  if [[ -n $url && -n ${HELPER:-} && -x $HELPER ]]; then
+    # Detach so the extension does not wait on the chooser.
+    if setsid "$HELPER" open "$url" >/dev/null 2>&1 & then
+      ok=true
+    fi
+  fi
+
+  if [[ $ok == true ]]; then
+    reply '{"ok":true}'
+  else
+    reply '{"ok":false}'
+  fi
+}
+
+main "$@"
