@@ -13,6 +13,7 @@
       "id": "browser-private",
       "name": "Private browser",
       "icon": "󰗹",
+      "private": true,
       "command": ["omarchy-launch-browser", "--private", "{url}"]
     },
     {

@@ -279,6 +279,17 @@ handlers_for_host() {
   '
 }
 
+# Private handlers must not leave a copy of the URL in history: the default
+# browser-private handler, any handler with "private": true, or a command that
+# opens a private/incognito window.
+is_private_handler() {
+  jq -e '
+    (.private == true)
+    or (.id == "browser-private")
+    or ((.command // []) | any(. == "--private" or . == "--incognito" or . == "--private-window" or . == "-private-window"))
+  ' <<<"$1" >/dev/null
+}
+
 run_handler() {
   local handler_json="$1" url="$2"
   local id
@@ -288,7 +299,9 @@ run_handler() {
     echo "omarchy-linkpick: empty command for handler '$id'" >&2
     return 1
   fi
-  record_history "$url" "$id"
+  if ! is_private_handler "$handler_json"; then
+    record_history "$url" "$id"
+  fi
   # Never recurse through xdg-open.
   exec env -u BROWSER "${cmd[@]}"
 }
