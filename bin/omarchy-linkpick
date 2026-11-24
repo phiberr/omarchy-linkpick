@@ -478,7 +478,8 @@ cmd_open() {
     | .[0].value // empty
   ' "$CONFIG_FILE" || true)
 
-  if [[ -n $preferred && $preferred != ask ]]; then
+  # An explicit always=ask rule wins over any preferred handler.
+  if [[ $always != ask && -n $preferred && $preferred != ask ]]; then
     handler=$(handler_by_id "$preferred") || true
     if [[ -n ${handler:-} ]]; then
       run_handler "$handler" "$url"
