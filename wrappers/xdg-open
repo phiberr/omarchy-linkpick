@@ -15,6 +15,9 @@ fi
 is_url() {
   local s="$1"
   [[ $s =~ ^[Hh][Tt][Tt][Pp][Ss]?:// ]] && return 0
+  # An existing local path stays a file for the real xdg-open, even if its
+  # name looks like a domain (notes.md, report.pdf, ...).
+  [[ -e $s ]] && return 1
   [[ $s =~ ^[[:alnum:]][[:alnum:].-]+\.[[:alpha:]]{2,}(/.*)?$ ]] && return 0
   return 1
 }

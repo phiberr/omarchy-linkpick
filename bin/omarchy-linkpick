@@ -86,6 +86,11 @@ normalize_url() {
     printf '%s\n' "$raw"
     return 0
   fi
+  # A schemeless argument that exists on disk is a local path, not a domain
+  # (native xdg-open treats it as a file), so never turn it into a URL.
+  if [[ -e $raw ]]; then
+    return 1
+  fi
   if [[ $raw =~ ^[[:alnum:]][[:alnum:].-]+\.[[:alpha:]]{2,}(/.*)?$ ]]; then
     printf 'https://%s\n' "$raw"
     return 0
