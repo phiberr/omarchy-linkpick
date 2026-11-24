@@ -604,6 +604,42 @@ uninstall_native_host() {
   done
 }
 
+# Point http(s) at a desktop entry in a mimeapps list. Creates the file when
+# missing. Callers that scrub XDG_CURRENT_DESKTOP (Electron sandboxes, some
+# portals) only read mimeapps.list, so both that file and the Hyprland-specific
+# list must stay in sync.
+set_mime_http_handler() {
+  local mime="$1" handler="$2"
+  local scheme
+  mkdir -p "$(dirname "$mime")"
+  if [[ ! -f $mime ]]; then
+    cat >"$mime" <<EOF
+[Default Applications]
+x-scheme-handler/http=$handler
+x-scheme-handler/https=$handler
+EOF
+    return
+  fi
+  for scheme in http https; do
+    if grep -q "^x-scheme-handler/${scheme}=" "$mime"; then
+      sed -i "s|^x-scheme-handler/${scheme}=.*|x-scheme-handler/${scheme}=$handler|" "$mime"
+    else
+      printf 'x-scheme-handler/%s=%s\n' "$scheme" "$handler" >>"$mime"
+    fi
+  done
+}
+
+restore_mime_http_handler() {
+  local mime="$1"
+  [[ -f $mime ]] || return 0
+  sed -i \
+    -e 's|^x-scheme-handler/https=omarchy-linkpick.desktop|x-scheme-handler/https=omarchy-browser.desktop|' \
+    -e 's|^x-scheme-handler/http=omarchy-linkpick.desktop|x-scheme-handler/http=omarchy-browser.desktop|' \
+    -e 's|^x-scheme-handler/https=omarchy-linksheet.desktop|x-scheme-handler/https=omarchy-browser.desktop|' \
+    -e 's|^x-scheme-handler/http=omarchy-linksheet.desktop|x-scheme-handler/http=omarchy-browser.desktop|' \
+    "$mime"
+}
+
 install_files() {
   local root
   root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -633,26 +669,12 @@ PATH=$HOME/.local/bin:\${PATH}
 EOF
   rm -f "$HOME/.config/environment.d/99-omarchy-linksheet.conf"
 
-  # Desktop mime fallback for portals / callers that skip PATH.
-  local mime="$HOME/.config/hyprland-mimeapps.list"
-  if [[ -f $mime ]]; then
-    if grep -q '^x-scheme-handler/https=' "$mime"; then
-      sed -i 's|^x-scheme-handler/https=.*|x-scheme-handler/https=omarchy-linkpick.desktop|' "$mime"
-    else
-      printf 'x-scheme-handler/https=omarchy-linkpick.desktop\n' >>"$mime"
-    fi
-    if grep -q '^x-scheme-handler/http=' "$mime"; then
-      sed -i 's|^x-scheme-handler/http=.*|x-scheme-handler/http=omarchy-linkpick.desktop|' "$mime"
-    else
-      printf 'x-scheme-handler/http=omarchy-linkpick.desktop\n' >>"$mime"
-    fi
-  else
-    cat >"$mime" <<'EOF'
-[Default Applications]
-x-scheme-handler/http=omarchy-linkpick.desktop
-x-scheme-handler/https=omarchy-linkpick.desktop
-EOF
-  fi
+  # Desktop mime fallback for portals / callers that skip PATH. Keep the
+  # generic mimeapps.list in sync with the Hyprland-specific list — Electron
+  # apps (Grok Bot) and other sandboxed openers often resolve https without
+  # XDG_CURRENT_DESKTOP and would otherwise hit google-chrome.desktop.
+  set_mime_http_handler "$HOME/.config/hyprland-mimeapps.list" omarchy-linkpick.desktop
+  set_mime_http_handler "$HOME/.config/mimeapps.list" omarchy-linkpick.desktop
 
   # Chromium/Chrome app-window interception.
   rm -rf "$EXT_INSTALL_DIR"
@@ -680,7 +702,7 @@ Installed omarchy-linkpick.
 - Wrapper: ~/.local/bin/xdg-open
 - Default-browser shim: ~/.local/bin/omarchy-cmd-default-browser
 - Helper:  ~/.local/bin/omarchy-linkpick
-- Desktop: omarchy-linkpick.desktop (hyprland-mimeapps.list)
+- Desktop: omarchy-linkpick.desktop (hyprland-mimeapps.list + mimeapps.list)
 - Extension: $EXT_INSTALL_DIR (id $EXT_ID)
 - Native host: $HOST_NAME
 - Plugin:  $PLUGIN_DIR
@@ -712,13 +734,8 @@ uninstall_files() {
   rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-linkpick"
   rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/omarchy-linksheet"
 
-  local mime="$HOME/.config/hyprland-mimeapps.list"
-  if [[ -f $mime ]]; then
-    sed -i 's|^x-scheme-handler/https=omarchy-linkpick.desktop|x-scheme-handler/https=omarchy-browser.desktop|' "$mime"
-    sed -i 's|^x-scheme-handler/http=omarchy-linkpick.desktop|x-scheme-handler/http=omarchy-browser.desktop|' "$mime"
-    sed -i 's|^x-scheme-handler/https=omarchy-linksheet.desktop|x-scheme-handler/https=omarchy-browser.desktop|' "$mime"
-    sed -i 's|^x-scheme-handler/http=omarchy-linksheet.desktop|x-scheme-handler/http=omarchy-browser.desktop|' "$mime"
-  fi
+  restore_mime_http_handler "$HOME/.config/hyprland-mimeapps.list"
+  restore_mime_http_handler "$HOME/.config/mimeapps.list"
 
   if [[ -e $PLUGIN_DIR ]]; then
     rm -rf "$PLUGIN_DIR"
@@ -729,7 +746,7 @@ uninstall_files() {
   update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
 
   echo "Uninstalled wrappers, helper, desktop entry, extension, native host, and plugin $PLUGIN_ID."
-  echo "Restored hyprland-mimeapps.list http(s) handlers to omarchy-browser.desktop."
+  echo "Restored hyprland-mimeapps.list and mimeapps.list http(s) handlers to omarchy-browser.desktop."
   echo "Left user config at $CONFIG_FILE and history under $STATE_DIR."
   echo "If a previous LinkSheet config/history still exists under ~/.config/omarchy-linksheet or ~/.local/state/omarchy-linksheet, it was left in place."
   echo "Restart Chromium/Chrome to drop the unloaded extension."
@@ -750,6 +767,7 @@ cmd_doctor() {
   fi
   echo "default-browser cmd: $(type -P omarchy-cmd-default-browser || echo missing) -> $(omarchy-cmd-default-browser 2>/dev/null || echo unset)"
   echo "https mime (hyprland): $(awk -F= '/^x-scheme-handler\/https=/{print $2; exit}' "$HOME/.config/hyprland-mimeapps.list" 2>/dev/null || echo unset)"
+  echo "https mime (generic):  $(awk -F= '/^x-scheme-handler\/https=/{print $2; exit}' "$HOME/.config/mimeapps.list" 2>/dev/null || echo unset)"
   echo "menu-select: $(type -P omarchy-menu-select || echo missing)"
   echo "launch-browser: $(type -P omarchy-launch-browser || echo missing)"
   echo "chrome bin: $(chrome_bin || echo missing)"
