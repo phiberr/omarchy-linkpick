@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.phiberr.linkpick",
   "name": "Linkpick",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "author": "phiberr",
   "license": "MIT",
   "description": "LinkSheet-inspired URL chooser: Chrome profiles, app-window interception, Just once / Always / Prefer host rules.",

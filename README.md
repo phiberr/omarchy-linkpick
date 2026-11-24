@@ -45,8 +45,9 @@ use `sudo`, but it will:
   `~/.local/bin/omarchy-cmd-default-browser` (shadowing the system
   `xdg-open` and Omarchy's default-browser helper)
 - Install `~/.local/bin/omarchy-linkpick` and the native messaging host
-- Install a user desktop entry and point `hyprland-mimeapps.list` at
-  `omarchy-linkpick.desktop` for `http` and `https`
+- Install a user desktop entry and point both `hyprland-mimeapps.list` and
+  `mimeapps.list` at `omarchy-linkpick.desktop` for `http` and `https`
+  (Electron apps that scrub `XDG_CURRENT_DESKTOP` only read the generic list)
 - Prepend `~/.local/bin` to `PATH` via
   `~/.config/environment.d/99-omarchy-linkpick.conf` (takes effect after
   a logout/login)
@@ -134,8 +135,9 @@ on or off.
 
 1. `~/.local/bin/xdg-open` wraps `/usr/bin/xdg-open` and hands `http(s)` to
    the helper.
-2. `hyprland-mimeapps.list` also points `http(s)` at
-   `omarchy-linkpick.desktop` for portal callers.
+2. `hyprland-mimeapps.list` and `mimeapps.list` also point `http(s)` at
+   `omarchy-linkpick.desktop` for portal callers and Electron apps that
+   resolve schemes without a desktop-specific mime list.
 3. `~/.local/bin/omarchy-cmd-default-browser` skips Linkpick (and
    `omarchy-browser`) so webapps still launch in Chrome/Brave/etc.
 4. A Chromium/Chrome extension (loaded via `chromium-flags.conf` /
@@ -171,6 +173,18 @@ installed Linkpick.
 
 ## Changelog
 
+### 0.3.2
+
+- `install` also points `mimeapps.list` http(s) at Linkpick so Electron apps
+  that resolve schemes without `XDG_CURRENT_DESKTOP` (for example Grok Bot)
+  no longer bypass the chooser via `google-chrome.desktop` (#5).
+- Missing http(s) lines are inserted under `[Default Applications]`, not
+  appended after `[Added Associations]`.
+- `uninstall` restores the previous `mimeapps.list` handlers recorded at
+  install (for example `google-chrome.desktop`), or `omarchy-browser.desktop`
+  if none were recorded. `hyprland-mimeapps.list` still returns to
+  `omarchy-browser.desktop`.
+
 ### 0.3.1
 
 - Private browser opens are no longer recorded in history (#1).
@@ -183,10 +197,12 @@ installed Linkpick.
 
 This removes the wrappers, helper, desktop entry, extension, native host,
 PATH drop-in, and the plugin directory. It restores `http` / `https` in
-`hyprland-mimeapps.list` to `omarchy-browser.desktop`. It leaves your
-`~/.config/omarchy-linkpick/config.json` and click history in place, and
-does not delete a previous LinkSheet config or history if those still
-exist under the old paths.
+`hyprland-mimeapps.list` to `omarchy-browser.desktop`. For `mimeapps.list`,
+it restores the handlers recorded at install (for example
+`google-chrome.desktop`), or `omarchy-browser.desktop` if none were
+recorded. It leaves your `~/.config/omarchy-linkpick/config.json` and click
+history in place, and does not delete a previous LinkSheet config or history
+if those still exist under the old paths.
 
 ```bash
 omarchy-linkpick uninstall
