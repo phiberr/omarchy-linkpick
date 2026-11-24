@@ -147,6 +147,38 @@ on or off.
 6. Handlers call `omarchy-launch-browser` / `omarchy-launch-webapp` /
    `google-chrome-stable --profile-directory=…` directly (no recursion).
 
+Rules and privacy:
+
+- An explicit `always <host> ask` rule always shows the chooser, even if a
+  `preferred` handler matches the same host.
+- Opens with a private handler (the default **Private browser**, any handler
+  with `"private": true`, or a command using `--private`, `--incognito` or
+  `--private-window`) are not written to
+  `~/.local/state/omarchy-linkpick/history.json`.
+- A schemeless argument that exists as a local path (for example
+  `notes.md` or `report.pdf`) is passed to the real `xdg-open` as a file and
+  is never turned into an `https://` URL.
+
+## Tests
+
+```bash
+bash tests/run.sh
+```
+
+The tests run a copy of the scripts in a temporary `HOME` with stubbed
+launchers. They do not open a browser, call the real `xdg-open`, or touch an
+installed Linkpick.
+
+## Changelog
+
+### 0.3.1
+
+- Private browser opens are no longer recorded in history (#1).
+- Existing local files whose names look like domains stay local files (#2).
+- An explicit host `ask` rule now wins over a preferred handler (#3).
+- `wrappers/omarchy-cmd-default-browser` keeps Omarchy's original copyright
+  and MIT notice (#4).
+
 ## Uninstall
 
 This removes the wrappers, helper, desktop entry, extension, native host,
@@ -173,3 +205,7 @@ you want the PATH change fully reversed.
 ## License
 
 [MIT](LICENSE) © 2026 phiberr
+
+`wrappers/omarchy-cmd-default-browser` is adapted from Omarchy
+(https://github.com/basecamp/omarchy) and keeps Omarchy's copyright and MIT
+notice in the file header.
