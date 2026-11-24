@@ -18,7 +18,8 @@ check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 # Repo copy with /usr/bin/xdg-open pointed at a logging stub.
 mkdir -p "$T/repo" "$T/stub" "$T/home" "$T/cwd"
-cp -a "$ROOT/bin" "$ROOT/wrappers" "$ROOT/config" "$T/repo/"
+cp -a "$ROOT/bin" "$ROOT/wrappers" "$ROOT/config" "$ROOT/share" "$ROOT/browser" "$ROOT/native-messaging-hosts" \
+  "$ROOT/manifest.json" "$ROOT/BarWidget.qml" "$ROOT/Panel.qml" "$T/repo/"
 sed -i "s#/usr/bin/xdg-open#$T/stub/real-xdg-open#g" "$T/repo/bin/omarchy-linkpick" "$T/repo/wrappers/xdg-open"
 
 LOG="$T/log"
@@ -101,6 +102,54 @@ check "preferred alone still opens without chooser" "grep -qx 'omarchy-launch-br
 echo "# 4. Omarchy notice kept (#4)"
 check "omarchy-cmd-default-browser keeps the Omarchy copyright and MIT notice" \
   "grep -q '^# Copyright (c) David Heinemeier Hansson' '$ROOT/wrappers/omarchy-cmd-default-browser' && grep -q 'The above copyright notice and this permission notice shall be' '$ROOT/wrappers/omarchy-cmd-default-browser'"
+
+echo "# 5. mimeapps.list install and restore (#5)"
+chrome_mime() {
+  cat >"$1" <<'MIME'
+[Default Applications]
+x-scheme-handler/http=google-chrome.desktop
+x-scheme-handler/https=google-chrome.desktop
+MIME
+}
+https_in_default() {
+  awk '
+    /^\[Default Applications\]/ {s=1; next}
+    /^\[/ {s=0}
+    s && /^x-scheme-handler\/https=omarchy-linkpick.desktop$/ {def=1}
+    /^\[Added Associations\]/ {added=1}
+    added && /^x-scheme-handler\/https=/ {wrong=1}
+    END { exit (def && !wrong) ? 0 : 1 }
+  ' "$1"
+}
+
+reset
+mkdir -p "$HOME/.config"
+chrome_mime "$HOME/.config/hyprland-mimeapps.list"
+chrome_mime "$HOME/.config/mimeapps.list"
+"$LP" install >/dev/null
+check "fresh install rewrites hyprland-mimeapps.list from google-chrome.desktop" \
+  "grep -qx 'x-scheme-handler/https=omarchy-linkpick.desktop' '$HOME/.config/hyprland-mimeapps.list'"
+check "fresh install rewrites mimeapps.list from google-chrome.desktop" \
+  "grep -qx 'x-scheme-handler/https=omarchy-linkpick.desktop' '$HOME/.config/mimeapps.list' && grep -qx 'x-scheme-handler/http=omarchy-linkpick.desktop' '$HOME/.config/mimeapps.list'"
+
+"$LP" uninstall >/dev/null
+check "uninstall restores mimeapps.list to google-chrome.desktop" \
+  "grep -qx 'x-scheme-handler/https=google-chrome.desktop' '$HOME/.config/mimeapps.list' && grep -qx 'x-scheme-handler/http=google-chrome.desktop' '$HOME/.config/mimeapps.list'"
+check "uninstall restores hyprland-mimeapps.list to omarchy-browser.desktop" \
+  "grep -qx 'x-scheme-handler/https=omarchy-browser.desktop' '$HOME/.config/hyprland-mimeapps.list'"
+
+reset
+mkdir -p "$HOME/.config"
+cat >"$HOME/.config/mimeapps.list" <<'MIME'
+[Default Applications]
+text/plain=nvim.desktop
+
+[Added Associations]
+text/plain=code.desktop
+MIME
+"$LP" install >/dev/null
+check "http(s) lines go into [Default Applications] when [Added Associations] is last" \
+  "https_in_default '$HOME/.config/mimeapps.list'"
 
 echo "# $pass passed, $fail failed"
 (( fail == 0 ))
